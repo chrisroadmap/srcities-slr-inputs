@@ -16,6 +16,7 @@
 # Based on https://github.com/chrisroadmap/cop26-pathways/blob/main/notebooks/3_run-emissions-scenarios.ipynb
 
 # %%
+import os
 import json
 from multiprocessing import Pool
 import platform
@@ -24,11 +25,23 @@ import fair
 import matplotlib.pyplot as pl
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from tqdm.auto import tqdm
+
+from h5_utils import save_dict_to_hdf5
 
 # %%
+# load in the configs and extend params to 2500
 with open('../data_input/fair-1.6.2-wg3-params.json') as f:
     config_list = json.load(f)
+
+    for data in config_list:
+        for key in data:
+            val = data[key]
+            # if the value is a list of length 401
+            if type(val) == list and len(val) == 361:
+                for i in range(390):
+                    # add the final value 400 - n times
+                    val.append(val[-1])
 
 # %%
 emissions_in = {}
@@ -36,17 +49,17 @@ results_out = {}
 WORKERS = 11  # set this based on your individual machine - allows parallelisation. nprocessors-1 is a sensible shout.
 
 # %%
-scenarios = ["ssp245_constant-2020-ch4", "ch4_40"]
+scenarios = ["H", "HL", "M", "ML", "L", "LN", "VL"]
 
 # %%
 for scenario in scenarios:
-    emissions_in[scenario] = np.loadtxt('../data_input/emissions/{}.csv'.format(scenario), delimiter=',')
+    emissions_in[scenario] = np.loadtxt('../data_input/emissions/fair-1.6.2-inputs/{}.csv'.format(scenario), delimiter=',')
 
 
 # %%
 def run_fair(args):
-    thisC, thisF, thisT, _, thisOHU, _, thisAF = fair.forward.fair_scm(**args)
-    return (thisC[:,0], thisC[:,1], thisT, thisF[:,1], np.sum(thisF, axis=1))
+    _, thisF, thisT, _, thisOHU, _, thisAF = fair.forward.fair_scm(**args)
+    return (thisT, thisOHU, np.sum(thisF, axis=1), np.sum(thisF[:,35:41], axis=1))
 
 def fair_process(emissions):
     updated_config = []
@@ -69,14 +82,13 @@ def fair_process(emissions):
         
     # multiprocessing is not working for me on Windows
     if platform.system() == 'Windows':
-        shape = (361, len(updated_config))
-        c_co2 = np.ones(shape) * np.nan
-        c_ch4 = np.ones(shape) * np.nan
+        shape = (751, len(updated_config))
+        ohu = np.ones(shape) * np.nan
         t = np.ones(shape) * np.nan
-        f_ch4 = np.ones(shape) * np.nan
+        f_aer = np.ones(shape) * np.nan
         f_tot = np.ones(shape) * np.nan
         for i, cfg in tqdm(enumerate(updated_config), total=len(updated_config), position=0, leave=True):
-            c_co2[:,i], c_ch4[:,i], t[:,i], f_ch4[:,i], f_tot[:,i] = run_fair(updated_config[i])
+            t[:,i], ohu[:,i], f_tot[:,i], f_aer[:,i] = run_fair(updated_config[i])
     
     else:
         if __name__ == '__main__':
@@ -84,33 +96,38 @@ def fair_process(emissions):
                 result = list(tqdm(pool.imap(run_fair, updated_config), total=len(updated_config), position=0, leave=True))
 
         result_t = np.array(result).transpose(1,2,0)
-        c_co2, c_ch4, t, f_ch4, f_tot = result_t
-    temp_rebase = t - t[100:151,:].mean(axis=0)
+        t, ohc, f_tot, f_aer = result_t
+    #temp_rebase = t - t[100:151,:].mean(axis=0)
     
-    return c_co2, c_ch4, temp_rebase, f_ch4, f_tot
+    return t, ohu, f_tot, f_aer
 
 
 # %%
 for scenario in tqdm(scenarios, position=0, leave=True):
     results_out[scenario] = {}
     (
-        results_out[scenario]['co2_concentrations'],
-        results_out[scenario]['ch4_concentrations'],
-        results_out[scenario]['temperatures'],
-        results_out[scenario]['ch4_effective_radiative_forcing'],
-        results_out[scenario]['effective_radiative_forcing']
+        results_out[scenario]['temperature'],
+        results_out[scenario]['ocean_heat_content'],
+        results_out[scenario]['effective_radiative_forcing'],
+        results_out[scenario]['aerosol_effective_radiative_forcing'],
     ) = fair_process(emissions_in[scenario])
 
 # %%
-emissions_in[scenario]
+pl.plot(results_out[scenario]['temperature'])
 
 # %%
-config_list[0]
+pl.plot(results_out[scenario]['ocean_heat_content'])
 
 # %%
-import numpy as np
+pl.plot(results_out[scenario]['aerosol_effective_radiative_forcing'])
 
 # %%
-np.__version__
+pl.plot(results_out[scenario]['effective_radiative_forcing'])
+
+# %%
+os.makedirs('../data_output', exist_ok=True)
+
+# %%
+save_dict_to_hdf5(results_out, '../data_output/fair_scenarios.h5')
 
 # %%
