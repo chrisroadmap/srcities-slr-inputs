@@ -1,3 +1,8 @@
+# large data files
+data_output/
+data_input/fair-samples/
+data_input/fair-1.6.2-wg3-params.json
+
 # notebooks
 *.ipynb
 
